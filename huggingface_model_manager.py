@@ -8,7 +8,7 @@ class HuggingFaceModelManager:
     def __init__(self):
         # Use OpenRouter for reliable OpenAI-compatible API access to Qwen2 7B specifically
         self.model_options = [
-            "qwen/qwen-2-7b-instruct"  # ONLY use the requested Qwen2 7B model
+            "qwen/qwen-2.5-7b-instruct"  # ONLY use the requested Qwen2 7B model
         ]
         self.model_name = self.model_options[0]
         
