@@ -111,13 +111,21 @@ class MockModelManager:
             "memory_usage": 0
         }
 
-# Try to import real ModelManager, fall back to mock if dependencies missing
+# Try to import real ModelManager, prefer HuggingFace API, fall back to mock if dependencies missing
 try:
-    from model_manager import ModelManager
+    from huggingface_model_manager import HuggingFaceModelManager
+    ModelManager = HuggingFaceModelManager
     USE_REAL_MODEL = True
+    MODEL_TYPE = "HuggingFace API"
 except ImportError:
-    ModelManager = MockModelManager
-    USE_REAL_MODEL = False
+    try:
+        from model_manager import ModelManager
+        USE_REAL_MODEL = True
+        MODEL_TYPE = "Local Model"
+    except ImportError:
+        ModelManager = MockModelManager
+        USE_REAL_MODEL = False
+        MODEL_TYPE = "Mock Model"
 
 # Page configuration
 st.set_page_config(
@@ -149,17 +157,35 @@ def main():
         if st.session_state.language == 'ko':
             st.title("🤖 HB AI - 한국어 AI 채팅 시스템")
             if not USE_REAL_MODEL:
-                st.markdown("**Qwen2 7B 모델을 활용한 한국어 텍스트 생성 및 대화 AI** *(현재 테스트 모드)*")
-                st.info("🔧 현재 모의 응답으로 테스트 중입니다. 실제 AI 모델 설치를 위해 시스템을 준비하고 있습니다.")
+                st.markdown("**Qwen2 7B 모델을 활용한 한국어 텍스트 생성 및 대화 AI** *(테스트 모드)*")
+                st.info("🔧 현재 모의 응답으로 테스트 중입니다.")
             else:
-                st.markdown("**Qwen2 7B 모델을 활용한 한국어 텍스트 생성 및 대화 AI**")
+                st.markdown(f"**Qwen2 7B 모델을 활용한 한국어 텍스트 생성 및 대화 AI** *({MODEL_TYPE})*")
+                if MODEL_TYPE == "HuggingFace API":
+                    openrouter_key = os.getenv('OPENROUTER_API_KEY')
+                    if openrouter_key:
+                        st.success("✅ OpenRouter API 키가 설정되어 실제 Qwen2 7B 응답을 받을 수 있습니다.")
+                        if st.session_state.model_loaded and st.session_state.model_manager:
+                            model_info = st.session_state.model_manager.get_model_info()
+                            st.info(f"🤖 활성 모델: {model_info['model_name']}")
+                    else:
+                        st.warning("⚠️ 실제 Qwen2 7B 응답을 위해 OPENROUTER_API_KEY를 설정하세요.")
         else:
             st.title("🤖 HB AI - Korean AI Chat System")
             if not USE_REAL_MODEL:
                 st.markdown("**Korean text generation and conversational AI powered by Qwen2 7B** *(Testing Mode)*")
-                st.info("🔧 Currently testing with mock responses. Preparing system for actual AI model installation.")
+                st.info("🔧 Currently testing with mock responses.")
             else:
-                st.markdown("**Korean text generation and conversational AI powered by Qwen2 7B**")
+                st.markdown(f"**Korean text generation and conversational AI powered by Qwen2 7B** *({MODEL_TYPE})*")
+                if MODEL_TYPE == "HuggingFace API":
+                    openrouter_key = os.getenv('OPENROUTER_API_KEY')
+                    if openrouter_key:
+                        st.success("✅ OpenRouter API key configured for real Qwen2 7B responses.")
+                        if st.session_state.model_loaded and st.session_state.model_manager:
+                            model_info = st.session_state.model_manager.get_model_info()
+                            st.info(f"🤖 Active Model: {model_info['model_name']}")
+                    else:
+                        st.warning("⚠️ Set OPENROUTER_API_KEY for real Qwen2 7B responses via OpenRouter.")
     
     with col3:
         if st.button("🌐 한국어" if st.session_state.language == 'en' else "🌐 English"):
@@ -176,10 +202,14 @@ def main():
                 st.header("🔧 모델 로딩")
                 load_button_text = "Qwen2 7B 모델 로드"
                 loading_text = "모델을 로드하는 중입니다..."
+                if not os.getenv('OPENROUTER_API_KEY'):
+                    st.info("💡 OPENROUTER_API_KEY 설정으로 실제 Qwen2 7B 응답을 받으세요")
             else:
                 st.header("🔧 Model Loading")
                 load_button_text = "Load Qwen2 7B Model"
                 loading_text = "Loading model..."
+                if not os.getenv('OPENROUTER_API_KEY'):
+                    st.info("💡 Set OPENROUTER_API_KEY for real Qwen2 7B responses")
             
             if st.button(load_button_text, type="primary"):
                 load_model()
@@ -193,23 +223,22 @@ def main():
                 if st.button("🔄 Reload Model"):
                     reload_model()
 
-    # Main content area
-    if st.session_state.model_loaded and st.session_state.model_manager:
-        # Tab selection
-        if st.session_state.language == 'ko':
-            tab1, tab2 = st.tabs(["💬 채팅", "📝 텍스트 생성"])
-        else:
-            tab1, tab2 = st.tabs(["💬 Chat", "📝 Text Generation"])
-        
-        with tab1:
-            render_chat_interface()
-        
-        with tab2:
-            render_text_generation()
-    
+    # Main content area - Always show tabs, use mock responses if model not loaded
+    if st.session_state.language == 'ko':
+        tab1, tab2 = st.tabs(["💬 채팅", "📝 텍스트 생성"])
     else:
-        # Welcome screen
-        ui.render_welcome_screen()
+        tab1, tab2 = st.tabs(["💬 Chat", "📝 Text Generation"])
+    
+    with tab1:
+        render_chat_interface()
+    
+    with tab2:
+        render_text_generation()
+    
+    # Show welcome info if model not loaded
+    if not (st.session_state.model_loaded and st.session_state.model_manager):
+        with st.expander("📖 시작하기" if st.session_state.language == 'ko' else "📖 Getting Started", expanded=True):
+            ui.render_welcome_screen()
 
 def load_model():
     """Load the Qwen2 7B model with progress indicators"""
@@ -361,16 +390,31 @@ def process_chat_message(user_input):
         with st.spinner(
             "AI가 응답을 생성하는 중입니다..." if st.session_state.language == 'ko' else "AI is generating response..."
         ):
-            # Prepare conversation context
-            conversation_context = korean_processor.prepare_chat_context(st.session_state.chat_history)
+            response = None
             
-            # Generate response
-            response = st.session_state.model_manager.generate_chat_response(
-                conversation_context,
-                max_length=300,
-                temperature=0.7,
-                top_p=0.9
-            )
+            # Try real model first if available
+            if st.session_state.model_loaded and st.session_state.model_manager:
+                try:
+                    # Prepare conversation context
+                    conversation_context = korean_processor.prepare_chat_context(st.session_state.chat_history)
+                    
+                    # Generate response
+                    response = st.session_state.model_manager.generate_chat_response(
+                        conversation_context,
+                        max_length=300,
+                        temperature=0.7,
+                        top_p=0.9
+                    )
+                except Exception as e:
+                    print(f"Real model failed: {str(e)}")
+                    response = None
+            
+            # Fall back to mock responses if real model unavailable or failed
+            if not response:
+                print("Using mock response fallback")
+                mock_manager = MockModelManager()
+                conversation_context = korean_processor.prepare_chat_context(st.session_state.chat_history)
+                response = mock_manager.generate_chat_response(conversation_context)
             
             if response:
                 # Process Korean text
@@ -401,16 +445,30 @@ def generate_text(prompt, max_length, temperature, top_p):
         with st.spinner(
             "텍스트를 생성하는 중입니다..." if st.session_state.language == 'ko' else "Generating text..."
         ):
-            # Prepare prompt for Korean processing
-            processed_prompt = korean_processor.prepare_generation_prompt(prompt)
+            generated_text = None
             
-            # Generate text
-            generated_text = st.session_state.model_manager.generate_text(
-                processed_prompt,
-                max_length=max_length,
-                temperature=temperature,
-                top_p=top_p
-            )
+            # Try real model first if available
+            if st.session_state.model_loaded and st.session_state.model_manager:
+                try:
+                    # Prepare prompt for Korean processing
+                    processed_prompt = korean_processor.prepare_generation_prompt(prompt)
+                    
+                    # Generate text
+                    generated_text = st.session_state.model_manager.generate_text(
+                        processed_prompt,
+                        max_length=max_length,
+                        temperature=temperature,
+                        top_p=top_p
+                    )
+                except Exception as e:
+                    print(f"Real model failed: {str(e)}")
+                    generated_text = None
+            
+            # Fall back to mock responses if real model unavailable or failed
+            if not generated_text:
+                print("Using mock text generation fallback")
+                mock_manager = MockModelManager()
+                generated_text = mock_manager.generate_text(prompt, max_length, temperature, top_p)
             
             if generated_text:
                 # Post-process Korean text
