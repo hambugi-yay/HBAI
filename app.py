@@ -3,6 +3,9 @@ import os
 import traceback
 import time
 import random
+import uuid
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 from korean_utils import KoreanTextProcessor
 from ui_components import UIComponents
 
@@ -135,256 +138,314 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Chat Session Management Class
+class ChatSessionManager:
+    def __init__(self):
+        self.sessions = {}
+        self.current_session_id = None
+        
+    def create_new_session(self, is_temporary=False):
+        """Create a new chat session"""
+        session_id = str(uuid.uuid4())
+        session_data = {
+            'id': session_id,
+            'title': self._generate_session_title(),
+            'messages': [],
+            'created_at': datetime.now(),
+            'is_temporary': is_temporary,
+            'last_updated': datetime.now()
+        }
+        
+        if not is_temporary:
+            self.sessions[session_id] = session_data
+        
+        self.current_session_id = session_id
+        return session_id, session_data
+    
+    def get_current_session(self):
+        """Get current session data"""
+        if self.current_session_id:
+            if self.current_session_id in self.sessions:
+                return self.sessions[self.current_session_id]
+            elif hasattr(st.session_state, 'temp_session') and st.session_state.temp_session['id'] == self.current_session_id:
+                return st.session_state.temp_session
+        return None
+    
+    def switch_session(self, session_id):
+        """Switch to a different session"""
+        if session_id in self.sessions:
+            self.current_session_id = session_id
+            return True
+        return False
+    
+    def add_message(self, role, content):
+        """Add message to current session"""
+        current_session = self.get_current_session()
+        if current_session:
+            message = {
+                'role': role,
+                'content': content,
+                'timestamp': datetime.now()
+            }
+            current_session['messages'].append(message)
+            current_session['last_updated'] = datetime.now()
+            
+            # Update session title based on first message
+            if len(current_session['messages']) == 2 and role == 'assistant':
+                user_message = current_session['messages'][0]['content']
+                current_session['title'] = self._generate_title_from_message(user_message)
+    
+    def delete_session(self, session_id):
+        """Delete a session"""
+        if session_id in self.sessions:
+            del self.sessions[session_id]
+            if self.current_session_id == session_id:
+                self.current_session_id = None
+    
+    def get_session_list(self):
+        """Get list of sessions sorted by last updated"""
+        sessions = list(self.sessions.values())
+        return sorted(sessions, key=lambda x: x['last_updated'], reverse=True)
+    
+    def _generate_session_title(self):
+        """Generate initial session title"""
+        return "새 채팅" if st.session_state.get('language', 'ko') == 'ko' else "New Chat"
+    
+    def _generate_title_from_message(self, message):
+        """Generate title from first user message"""
+        # Truncate message to reasonable length for title
+        if len(message) > 30:
+            return message[:30] + "..."
+        return message
+
 # Initialize session state
 if 'language' not in st.session_state:
     st.session_state.language = 'ko'
-if 'chat_history' not in st.session_state:
-    st.session_state.chat_history = []
-if 'model_loaded' not in st.session_state:
-    st.session_state.model_loaded = False
+if 'chat_session_manager' not in st.session_state:
+    st.session_state.chat_session_manager = ChatSessionManager()
 if 'model_manager' not in st.session_state:
     st.session_state.model_manager = None
+if 'temp_session' not in st.session_state:
+    st.session_state.temp_session = None
+
+# Auto-load model on startup to remove development displays
+if 'model_loaded' not in st.session_state:
+    st.session_state.model_loaded = False
+    if not st.session_state.model_manager:
+        st.session_state.model_manager = ModelManager()
+        try:
+            st.session_state.model_manager.load_model()
+            st.session_state.model_loaded = True
+        except:
+            # Fall back to mock if model loading fails
+            st.session_state.model_loaded = False
 
 # Initialize components
 ui = UIComponents()
 korean_processor = KoreanTextProcessor()
 
 def main():
-    # Header with language toggle
-    col1, col2, col3 = st.columns([3, 1, 1])
+    """Main ChatGPT-style interface"""
+    # ChatGPT-style Layout
+    # Sidebar for chat sessions
+    with st.sidebar:
+        render_chat_sidebar()
     
+    # Main content area
+    render_main_chat_area()
+
+def render_chat_sidebar():
+    """Render ChatGPT-style sidebar with chat sessions"""
+    session_manager = st.session_state.chat_session_manager
+    
+    # Header with language toggle and new chat
+    col1, col2 = st.columns([1, 1])
     with col1:
-        if st.session_state.language == 'ko':
-            st.title("🤖 HB AI - 한국어 AI 채팅 시스템")
-            if not USE_REAL_MODEL:
-                st.markdown("**Qwen2 7B 모델을 활용한 한국어 텍스트 생성 및 대화 AI** *(테스트 모드)*")
-                st.info("🔧 현재 모의 응답으로 테스트 중입니다.")
-            else:
-                st.markdown(f"**Qwen2 7B 모델을 활용한 한국어 텍스트 생성 및 대화 AI** *({MODEL_TYPE})*")
-                if MODEL_TYPE == "HuggingFace API":
-                    openrouter_key = os.getenv('OPENROUTER_API_KEY')
-                    if openrouter_key:
-                        st.success("✅ OpenRouter API 키가 설정되어 실제 Qwen2 7B 응답을 받을 수 있습니다.")
-                        if st.session_state.model_loaded and st.session_state.model_manager:
-                            model_info = st.session_state.model_manager.get_model_info()
-                            st.info(f"🤖 활성 모델: {model_info['model_name']}")
-                    else:
-                        st.warning("⚠️ 실제 Qwen2 7B 응답을 위해 OPENROUTER_API_KEY를 설정하세요.")
-        else:
-            st.title("🤖 HB AI - Korean AI Chat System")
-            if not USE_REAL_MODEL:
-                st.markdown("**Korean text generation and conversational AI powered by Qwen2 7B** *(Testing Mode)*")
-                st.info("🔧 Currently testing with mock responses.")
-            else:
-                st.markdown(f"**Korean text generation and conversational AI powered by Qwen2 7B** *({MODEL_TYPE})*")
-                if MODEL_TYPE == "HuggingFace API":
-                    openrouter_key = os.getenv('OPENROUTER_API_KEY')
-                    if openrouter_key:
-                        st.success("✅ OpenRouter API key configured for real Qwen2 7B responses.")
-                        if st.session_state.model_loaded and st.session_state.model_manager:
-                            model_info = st.session_state.model_manager.get_model_info()
-                            st.info(f"🤖 Active Model: {model_info['model_name']}")
-                    else:
-                        st.warning("⚠️ Set OPENROUTER_API_KEY for real Qwen2 7B responses via OpenRouter.")
-    
-    with col3:
-        if st.button("🌐 한국어" if st.session_state.language == 'en' else "🌐 English"):
+        if st.button(
+            "🌐 EN" if st.session_state.language == 'ko' else "🌐 KO",
+            use_container_width=True
+        ):
             st.session_state.language = 'ko' if st.session_state.language == 'en' else 'en'
             st.rerun()
-
-    # Sidebar for model management
-    with st.sidebar:
-        ui.render_sidebar()
-        
-        # Model loading section
-        if not st.session_state.model_loaded:
-            if st.session_state.language == 'ko':
-                st.header("🔧 모델 로딩")
-                load_button_text = "Qwen2 7B 모델 로드"
-                loading_text = "모델을 로드하는 중입니다..."
-                if not os.getenv('OPENROUTER_API_KEY'):
-                    st.info("💡 OPENROUTER_API_KEY 설정으로 실제 Qwen2 7B 응답을 받으세요")
-            else:
-                st.header("🔧 Model Loading")
-                load_button_text = "Load Qwen2 7B Model"
-                loading_text = "Loading model..."
-                if not os.getenv('OPENROUTER_API_KEY'):
-                    st.info("💡 Set OPENROUTER_API_KEY for real Qwen2 7B responses")
-            
-            if st.button(load_button_text, type="primary"):
-                load_model()
-        else:
-            if st.session_state.language == 'ko':
-                st.success("✅ 모델이 성공적으로 로드되었습니다!")
-                if st.button("🔄 모델 재로드"):
-                    reload_model()
-            else:
-                st.success("✅ Model loaded successfully!")
-                if st.button("🔄 Reload Model"):
-                    reload_model()
-
-    # Main content area - Always show tabs, use mock responses if model not loaded
-    if st.session_state.language == 'ko':
-        tab1, tab2 = st.tabs(["💬 채팅", "📝 텍스트 생성"])
-    else:
-        tab1, tab2 = st.tabs(["💬 Chat", "📝 Text Generation"])
     
-    with tab1:
-        render_chat_interface()
-    
-    with tab2:
-        render_text_generation()
-    
-    # Show welcome info if model not loaded
-    if not (st.session_state.model_loaded and st.session_state.model_manager):
-        with st.expander("📖 시작하기" if st.session_state.language == 'ko' else "📖 Getting Started", expanded=True):
-            ui.render_welcome_screen()
-
-def load_model():
-    """Load the Qwen2 7B model with progress indicators"""
-    try:
-        with st.spinner(
-            "모델을 로드하는 중입니다... 처음 실행시 몇 분이 소요될 수 있습니다." 
-            if st.session_state.language == 'ko' 
-            else "Loading model... This may take a few minutes on first run."
+    with col2:
+        if st.button(
+            "➕ 새 채팅" if st.session_state.language == 'ko' else "➕ New Chat",
+            type="primary",
+            use_container_width=True
         ):
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            # Initialize model manager
-            st.session_state.model_manager = ModelManager()
-            
-            # Load model with progress updates
-            success = st.session_state.model_manager.load_model(
-                progress_callback=lambda step, total, msg: update_progress(
-                    progress_bar, status_text, step, total, msg
-                )
-            )
-            
-            if success:
-                st.session_state.model_loaded = True
-                progress_bar.progress(1.0)
-                status_text.success(
-                    "모델 로드 완료!" if st.session_state.language == 'ko' else "Model loaded successfully!"
-                )
-                st.rerun()
-            else:
-                error_msg = (
-                    "모델 로드에 실패했습니다. 인터넷 연결을 확인하고 다시 시도해주세요." 
-                    if st.session_state.language == 'ko' 
-                    else "Failed to load model. Please check your internet connection and try again."
-                )
-                st.error(error_msg)
-                
-    except Exception as e:
-        error_msg = (
-            f"모델 로드 중 오류가 발생했습니다: {str(e)}" 
-            if st.session_state.language == 'ko' 
-            else f"Error loading model: {str(e)}"
-        )
-        st.error(error_msg)
-        st.error(f"상세 오류: {traceback.format_exc()}")
-
-def reload_model():
-    """Reload the model"""
-    st.session_state.model_loaded = False
-    st.session_state.model_manager = None
-    st.rerun()
-
-def update_progress(progress_bar, status_text, step, total, message):
-    """Update progress indicators"""
-    progress = step / total if total > 0 else 0
-    progress_bar.progress(progress)
-    status_text.text(message)
-
-def render_chat_interface():
-    """Render the chat interface"""
-    if st.session_state.language == 'ko':
-        st.subheader("💬 AI와 대화하기")
-        placeholder_text = "메시지를 입력하세요..."
-        send_button_text = "전송"
-    else:
-        st.subheader("💬 Chat with AI")
-        placeholder_text = "Type your message..."
-        send_button_text = "Send"
+            session_id, _ = session_manager.create_new_session()
+            st.rerun()
     
-    # Display chat history
-    chat_container = st.container()
-    with chat_container:
-        for i, (role, message) in enumerate(st.session_state.chat_history):
-            if role == "user":
-                st.markdown(f"**👤 사용자:** {message}" if st.session_state.language == 'ko' else f"**👤 You:** {message}")
-            else:
-                st.markdown(f"**🤖 HB AI:** {message}")
-            st.markdown("---")
-    
-    # Chat input
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        user_input = st.text_input(
-            label="chat_input",
-            placeholder=placeholder_text,
-            label_visibility="collapsed",
-            key="chat_input"
-        )
-    with col2:
-        send_button = st.button(send_button_text, type="primary", use_container_width=True)
-    
-    # Process chat input
-    if send_button and user_input.strip():
-        process_chat_message(user_input.strip())
-
-def render_text_generation():
-    """Render the text generation interface"""
-    if st.session_state.language == 'ko':
-        st.subheader("📝 텍스트 생성")
-        st.markdown("프롬프트를 입력하여 AI가 텍스트를 생성하도록 하세요.")
-    else:
-        st.subheader("📝 Text Generation")
-        st.markdown("Enter a prompt to generate text with AI.")
-    
-    # Generation parameters
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        max_length = st.slider(
-            "최대 길이" if st.session_state.language == 'ko' else "Max Length", 
-            min_value=50, max_value=1000, value=200
-        )
-    with col2:
-        temperature = st.slider(
-            "창의성" if st.session_state.language == 'ko' else "Creativity", 
-            min_value=0.1, max_value=2.0, value=0.7, step=0.1
-        )
-    with col3:
-        top_p = st.slider(
-            "다양성" if st.session_state.language == 'ko' else "Diversity", 
-            min_value=0.1, max_value=1.0, value=0.9, step=0.1
-        )
-    
-    # Text input
-    prompt = st.text_area(
-        "프롬프트를 입력하세요:" if st.session_state.language == 'ko' else "Enter your prompt:",
-        height=100,
-        placeholder="예: 한국의 전통 음식에 대해 설명해주세요." if st.session_state.language == 'ko' else "e.g., Tell me about Korean traditional food."
-    )
-    
-    # Generate button
+    # Temporary chat button
     if st.button(
-        "텍스트 생성" if st.session_state.language == 'ko' else "Generate Text", 
-        type="primary"
+        "⚡ 임시 채팅" if st.session_state.language == 'ko' else "⚡ Temporary Chat",
+        use_container_width=True
     ):
-        if prompt.strip():
-            generate_text(prompt.strip(), max_length, temperature, top_p)
+        session_id, session_data = session_manager.create_new_session(is_temporary=True)
+        st.session_state.temp_session = session_data
+        st.rerun()
+    
+    st.markdown("---")
+    
+    # Chat session list
+    sessions = session_manager.get_session_list()
+    
+    if st.session_state.language == 'ko':
+        st.subheader("📋 채팅 기록")
+    else:
+        st.subheader("📋 Chat History")
+    
+    # Display current temporary session if exists
+    if hasattr(st.session_state, 'temp_session') and st.session_state.temp_session:
+        temp_session = st.session_state.temp_session
+        is_current_temp = session_manager.current_session_id == temp_session['id']
+        
+        temp_style = "background-color: #ff6b6b; color: white; border-radius: 5px; padding: 5px;" if is_current_temp else "border: 1px solid #ff6b6b; border-radius: 5px; padding: 5px;"
+        
+        if st.button(
+            f"⚡ {temp_session['title']}",
+            key=f"temp_session_{temp_session['id']}",
+            use_container_width=True
+        ):
+            session_manager.current_session_id = temp_session['id']
+            st.rerun()
+    
+    # Display regular sessions
+    for session in sessions:
+        is_current = session_manager.current_session_id == session['id']
+        
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            if st.button(
+                f"💬 {session['title']}",
+                key=f"session_{session['id']}",
+                type="primary" if is_current else "secondary",
+                use_container_width=True
+            ):
+                session_manager.switch_session(session['id'])
+                st.rerun()
+        
+        with col2:
+            if st.button(
+                "🗑️",
+                key=f"delete_{session['id']}",
+                help="삭제" if st.session_state.language == 'ko' else "Delete"
+            ):
+                session_manager.delete_session(session['id'])
+                st.rerun()
+    
+    # Footer info
+    st.markdown("---")
+    if st.session_state.language == 'ko':
+        st.markdown("**🤖 HB AI**")
+        st.caption("Qwen2.5 7B 모델 기반")
+    else:
+        st.markdown("**🤖 HB AI**")
+        st.caption("Powered by Qwen2.5 7B")
+
+def render_main_chat_area():
+    """Render main chat area with messages and input"""
+    session_manager = st.session_state.chat_session_manager
+    current_session = session_manager.get_current_session()
+    
+    # Header
+    if current_session:
+        st.markdown(f"### {current_session['title']}")
+        if current_session.get('is_temporary', False):
+            st.caption("⚡ 임시 채팅 - 저장되지 않습니다" if st.session_state.language == 'ko' else "⚡ Temporary Chat - Not saved")
+    else:
+        if st.session_state.language == 'ko':
+            st.markdown("### 🤖 HB AI와 대화하기")
+            st.markdown("새 채팅을 시작하거나 기존 채팅을 선택하세요.")
         else:
-            st.warning(
-                "프롬프트를 입력해주세요." if st.session_state.language == 'ko' else "Please enter a prompt."
+            st.markdown("### 🤖 Chat with HB AI")
+            st.markdown("Start a new chat or select an existing conversation.")
+    
+    # Messages area
+    messages_container = st.container()
+    
+    # Input area at bottom
+    with st.container():
+        if current_session is not None:
+            with messages_container:
+                render_messages(current_session['messages'])
+            
+            # Chat input at bottom
+            render_chat_input()
+        else:
+            # Show welcome message when no session selected
+            with messages_container:
+                ui.render_welcome_screen()
+
+def render_messages(messages: List[Dict]):
+    """Render chat messages with ChatGPT-style bubbles"""
+    for message in messages:
+        role = message['role']
+        content = message['content']
+        
+        if role == 'user':
+            # User message (right aligned)
+            col1, col2 = st.columns([1, 4])
+            with col2:
+                st.markdown(
+                    f'<div style="background-color: #007bff; color: white; padding: 10px; border-radius: 10px; margin: 5px 0; text-align: right;">'
+                    f'<strong>👤 {"사용자" if st.session_state.language == "ko" else "You"}</strong><br>'
+                    f'{content}'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+        else:
+            # AI message (left aligned)
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.markdown(
+                    f'<div style="background-color: #f1f3f4; color: black; padding: 10px; border-radius: 10px; margin: 5px 0;">'
+                    f'<strong>🤖 HB AI</strong><br>'
+                    f'{content}'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+
+def render_chat_input():
+    """Render bottom chat input area"""
+    st.markdown("---")
+    
+    # Chat input form
+    with st.form(key="chat_form", clear_on_submit=True):
+        col1, col2 = st.columns([5, 1])
+        
+        with col1:
+            user_input = st.text_input(
+                label="message",
+                placeholder="메시지를 입력하세요..." if st.session_state.language == 'ko' else "Type your message...",
+                label_visibility="collapsed"
             )
+        
+        with col2:
+            send_button = st.form_submit_button(
+                "📤" if st.session_state.language == 'ko' else "📤",
+                use_container_width=True
+            )
+        
+        if send_button and user_input.strip():
+            process_chat_message(user_input.strip())
+            st.rerun()
+
+
+
 
 def process_chat_message(user_input):
     """Process chat message and generate AI response"""
     try:
-        # Add user message to history
-        st.session_state.chat_history.append(("user", user_input))
+        session_manager = st.session_state.chat_session_manager
+        
+        # Create new session if none exists
+        if not session_manager.current_session_id:
+            session_id, _ = session_manager.create_new_session()
+        
+        # Add user message to current session
+        session_manager.add_message("user", user_input)
         
         # Generate AI response
         with st.spinner(
@@ -392,44 +453,43 @@ def process_chat_message(user_input):
         ):
             response = None
             
-            # Try real model first if available
-            if st.session_state.model_loaded and st.session_state.model_manager:
-                try:
-                    # Prepare conversation context
-                    conversation_context = korean_processor.prepare_chat_context(st.session_state.chat_history)
-                    
-                    # Generate response
-                    response = st.session_state.model_manager.generate_chat_response(
-                        conversation_context,
-                        max_length=300,
-                        temperature=0.7,
-                        top_p=0.9
+            # Prepare conversation context from current session
+            current_session = session_manager.get_current_session()
+            if current_session:
+                # Convert session messages to the format expected by korean_processor
+                chat_history = [(msg['role'], msg['content']) for msg in current_session['messages']]
+                conversation_context = korean_processor.prepare_chat_context(chat_history)
+                
+                # Try real model first if available
+                if st.session_state.model_loaded and st.session_state.model_manager:
+                    try:
+                        response = st.session_state.model_manager.generate_chat_response(
+                            conversation_context,
+                            max_length=300,
+                            temperature=0.7,
+                            top_p=0.9
+                        )
+                    except Exception as e:
+                        print(f"Real model failed: {str(e)}")
+                        response = None
+                
+                # Fall back to mock responses if real model unavailable or failed
+                if not response:
+                    print("Using mock response fallback")
+                    mock_manager = MockModelManager()
+                    response = mock_manager.generate_chat_response(conversation_context)
+                
+                if response:
+                    # Process Korean text
+                    processed_response = korean_processor.post_process_response(response)
+                    session_manager.add_message("assistant", processed_response)
+                else:
+                    error_msg = (
+                        "응답 생성에 실패했습니다. 다시 시도해주세요." 
+                        if st.session_state.language == 'ko' 
+                        else "Failed to generate response. Please try again."
                     )
-                except Exception as e:
-                    print(f"Real model failed: {str(e)}")
-                    response = None
-            
-            # Fall back to mock responses if real model unavailable or failed
-            if not response:
-                print("Using mock response fallback")
-                mock_manager = MockModelManager()
-                conversation_context = korean_processor.prepare_chat_context(st.session_state.chat_history)
-                response = mock_manager.generate_chat_response(conversation_context)
-            
-            if response:
-                # Process Korean text
-                processed_response = korean_processor.post_process_response(response)
-                st.session_state.chat_history.append(("assistant", processed_response))
-            else:
-                error_msg = (
-                    "응답 생성에 실패했습니다. 다시 시도해주세요." 
-                    if st.session_state.language == 'ko' 
-                    else "Failed to generate response. Please try again."
-                )
-                st.session_state.chat_history.append(("assistant", error_msg))
-        
-        # Clear input and refresh
-        st.rerun()
+                    session_manager.add_message("assistant", error_msg)
         
     except Exception as e:
         error_msg = (
@@ -439,62 +499,6 @@ def process_chat_message(user_input):
         )
         st.error(error_msg)
 
-def generate_text(prompt, max_length, temperature, top_p):
-    """Generate text based on prompt"""
-    try:
-        with st.spinner(
-            "텍스트를 생성하는 중입니다..." if st.session_state.language == 'ko' else "Generating text..."
-        ):
-            generated_text = None
-            
-            # Try real model first if available
-            if st.session_state.model_loaded and st.session_state.model_manager:
-                try:
-                    # Prepare prompt for Korean processing
-                    processed_prompt = korean_processor.prepare_generation_prompt(prompt)
-                    
-                    # Generate text
-                    generated_text = st.session_state.model_manager.generate_text(
-                        processed_prompt,
-                        max_length=max_length,
-                        temperature=temperature,
-                        top_p=top_p
-                    )
-                except Exception as e:
-                    print(f"Real model failed: {str(e)}")
-                    generated_text = None
-            
-            # Fall back to mock responses if real model unavailable or failed
-            if not generated_text:
-                print("Using mock text generation fallback")
-                mock_manager = MockModelManager()
-                generated_text = mock_manager.generate_text(prompt, max_length, temperature, top_p)
-            
-            if generated_text:
-                # Post-process Korean text
-                final_text = korean_processor.post_process_response(generated_text)
-                
-                st.subheader(
-                    "생성된 텍스트:" if st.session_state.language == 'ko' else "Generated Text:"
-                )
-                st.markdown(f"**프롬프트:** {prompt}" if st.session_state.language == 'ko' else f"**Prompt:** {prompt}")
-                st.markdown("**응답:**" if st.session_state.language == 'ko' else "**Response:**")
-                st.write(final_text)
-                
-                # Copy button
-                st.code(final_text, language=None)
-            else:
-                st.error(
-                    "텍스트 생성에 실패했습니다." if st.session_state.language == 'ko' else "Failed to generate text."
-                )
-                
-    except Exception as e:
-        error_msg = (
-            f"텍스트 생성 중 오류가 발생했습니다: {str(e)}" 
-            if st.session_state.language == 'ko' 
-            else f"Error generating text: {str(e)}"
-        )
-        st.error(error_msg)
 
 if __name__ == "__main__":
     main()
