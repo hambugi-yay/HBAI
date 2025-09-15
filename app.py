@@ -128,7 +128,6 @@ class ChatSessionManager:
             'title': self._generate_session_title(),
             'messages': [],
             'created_at': datetime.now(),
-            'is_temporary': is_temporary,
             'last_updated': datetime.now()
         }
         if not is_temporary:
@@ -197,7 +196,6 @@ if 'temp_session' not in st.session_state:
 if 'model_loaded' not in st.session_state:
     st.session_state.model_loaded = False
 
-# Only load model once
 if not st.session_state.model_loaded:
     with st.spinner("AI 모델을 로드하는 중..."):
         if not st.session_state.model_manager:
@@ -314,7 +312,6 @@ def render_chat_sidebar():
 
     st.markdown("---")
     
-    # 전체 채팅 기록 다운로드
     all_sessions_data = json.dumps(session_manager.sessions, default=str, indent=2)
     st.download_button(
         label="📥 모든 채팅 기록 다운로드",
@@ -324,7 +321,6 @@ def render_chat_sidebar():
         help="모든 대화 기록을 하나의 JSON 파일로 저장합니다."
     )
     
-    # 채팅 기록 불러오기
     uploaded_file = st.file_uploader(
         "📤 채팅 기록 업로드",
         type="json",
@@ -335,6 +331,18 @@ def render_chat_sidebar():
             uploaded_data = json.load(uploaded_file)
             for session_id, session_data in uploaded_data.items():
                 if session_id not in session_manager.sessions:
+                    # Fix: Convert string dates to datetime objects
+                    if 'last_updated' in session_data and isinstance(session_data['last_updated'], str):
+                        session_data['last_updated'] = datetime.fromisoformat(session_data['last_updated'])
+                    if 'created_at' in session_data and isinstance(session_data['created_at'], str):
+                        session_data['created_at'] = datetime.fromisoformat(session_data['created_at'])
+                    
+                    # Fix: Also convert message timestamps
+                    if 'messages' in session_data:
+                        for message in session_data['messages']:
+                            if 'timestamp' in message and isinstance(message['timestamp'], str):
+                                message['timestamp'] = datetime.fromisoformat(message['timestamp'])
+                                
                     session_manager.sessions[session_id] = session_data
             st.success("대화 기록을 성공적으로 불러왔습니다!")
             st.rerun()
