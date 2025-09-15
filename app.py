@@ -128,5 +128,9 @@ def render_chat_input():
     if user_input:
         process_chat_message(user_input)
         st.rerun()
+
+
+
+
 if __name__=="__main__":
     main()
