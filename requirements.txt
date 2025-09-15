@@ -1,4 +1,2 @@
 streamlit
-korean_utils
-ui_components
 langdetect
