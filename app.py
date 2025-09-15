@@ -8,7 +8,8 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from korean_utils import KoreanTextProcessor
 from ui_components import UIComponents
-from langdetect import detect # 언어 감지를 위한 라이브러리 추가
+from langdetect import detect
+import json # JSON 처리를 위한 라이브러리 추가
 
 # Mock ModelManager for testing when dependencies are not available
 class MockModelManager:
@@ -347,6 +348,29 @@ def render_chat_sidebar():
         ):
             st.session_state.language = 'ko' if st.session_state.language == 'en' else 'en'
             st.rerun()
+    
+    # Add a button to clear chat history with confirmation
+    st.markdown("---")
+    if 'confirm_clear_chat' not in st.session_state:
+        st.session_state.confirm_clear_chat = False
+        
+    if st.session_state.confirm_clear_chat:
+        st.warning("정말 현재 대화를 삭제하시겠습니까?")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("예, 삭제합니다", use_container_width=True):
+                session_manager.delete_session(session_manager.current_session_id)
+                session_manager.create_new_session()
+                st.session_state.confirm_clear_chat = False
+                st.rerun()
+        with col2:
+            if st.button("아니오", use_container_width=True):
+                st.session_state.confirm_clear_chat = False
+                st.rerun()
+    else:
+        if st.button("🗑️ 대화 삭제", use_container_width=True):
+            st.session_state.confirm_clear_chat = True
+            st.rerun()
 
 def render_main_chat_area():
     """Render main chat area with messages and input"""
@@ -359,6 +383,18 @@ def render_main_chat_area():
     if current_session is None:
         render_gemini_welcome_screen()
     else:
+        # Save chat button
+        messages_json = json.dumps(current_session['messages'], default=str, indent=2)
+        
+        st.download_button(
+            label="💾 채팅 기록 저장",
+            data=messages_json,
+            file_name=f"HBAI_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            mime="application/json",
+            help="현재 대화 내용을 JSON 파일로 저장합니다."
+        )
+        st.markdown("---")
+        
         with messages_container:
             render_messages(current_session['messages'])
 
@@ -456,7 +492,8 @@ def render_chat_input():
             user_input = st.text_input(
                 label="message",
                 placeholder="메시지를 입력하세요..." if st.session_state.language == 'ko' else "Type your message...",
-                label_visibility="collapsed"
+                label_visibility="collapsed",
+                autocomplete="off" # This attribute helps disable browser-level suggestions
             )
         with col2:
             send_button = st.form_submit_button(
