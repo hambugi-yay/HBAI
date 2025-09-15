@@ -101,34 +101,32 @@ def render_chat_sidebar():
             session_manager.current_session_id = session['id']
             st.rerun()
 
-# ---- Main Chat Area ----
-def render_main_chat_area():
-    session_manager = st.session_state.chat_session_manager
-    session = session_manager.get_current_session()
-    
-    if not session:
-        ui.render_welcome_screen()
-        return
-    
-    st.markdown(f"### {session['title']}")
-    for msg in session["messages"]:
-        if msg["role"]=="user":
-            ui.render_user_message(msg["content"])
+# -------------------------
+# ChatGPT 스타일 메시지 표시
+# -------------------------
+def render_messages(messages: List[Dict]):
+    """ChatGPT-style bubbles using st.chat_message"""
+    for message in messages:
+        role = message['role']
+        content = message['content']
+        
+        if role == 'user':
+            with st.chat_message("user"):
+                st.markdown(content)
         else:
-            ui.render_ai_message(msg["content"])
-    
-    render_chat_input()
+            with st.chat_message("assistant"):
+                st.markdown(content)
 
-# ---- Chat Input ----
+# -------------------------
+# ChatGPT 스타일 입력창
+# -------------------------
 def render_chat_input():
-    session_manager = st.session_state.chat_session_manager
-    with st.form(key="chat_form", clear_on_submit=True):
-        user_input = st.text_input("", placeholder="메시지를 입력하세요..." if st.session_state.language=='ko' else "Type your message...")
-        if st.form_submit_button("📤") and user_input.strip():
-            session_manager.add_message("user", user_input)
-            response = st.session_state.model_manager.generate_chat_response(user_input)
-            session_manager.add_message("assistant", response)
-            st.rerun()
-
+    """Bottom chat input using st.chat_input"""
+    user_input = st.chat_input(
+        "메시지를 입력하세요..." if st.session_state.language == 'ko' else "Type your message..."
+    )
+    if user_input:
+        process_chat_message(user_input)
+        st.rerun()
 if __name__=="__main__":
     main()
