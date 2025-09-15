@@ -25,16 +25,8 @@ class MockModelManager:
         try:
             if progress_callback:
                 for i in range(1, 11):
-                    time.sleep(0.05)  # Simulate loading time with a smaller delay
-                    if i <= 3:
-                        msg = "디바이스 설정 중..." if st.session_state.language == 'ko' else "Setting up device..."
-                    elif i <= 6:
-                        msg = "토크나이저 로드 중..." if st.session_state.language == 'ko' else "Loading tokenizer..."
-                    elif i <= 9:
-                        msg = "모델 로드 중..." if st.session_state.language == 'ko' else "Loading model..."
-                    else:
-                        msg = "로드 완료!" if st.session_state.language == 'ko' else "Load complete!"
-                    progress_callback(i, 10, msg)
+                    time.sleep(0.01) # Very fast load simulation
+                    progress_callback(i, 10, "로드 중...")
             self.model = "mock_model"
             self.tokenizer = "mock_tokenizer"
             return True
@@ -44,7 +36,7 @@ class MockModelManager:
 
     def generate_text(self, prompt, max_length=200, temperature=0.7, top_p=0.9):
         """Generate mock text response"""
-        time.sleep(0.3)  # Simulate processing time
+        time.sleep(0.3)
         korean_responses = [
             "안녕하세요! 저는 HB AI입니다. 한국어로 자연스럽게 대화할 수 있습니다.",
             "요청하신 내용에 대해 도움을 드리겠습니다. 더 구체적인 질문이 있으시면 언제든 말씀해 주세요.",
@@ -176,7 +168,6 @@ class ChatSessionManager:
         if session_id in self.sessions:
             del self.sessions[session_id]
             if self.current_session_id == session_id:
-                # If current session is deleted, switch to a new one
                 new_session_list = self.get_session_list()
                 if new_session_list:
                     self.current_session_id = new_session_list[0]['id']
@@ -203,16 +194,20 @@ if 'model_manager' not in st.session_state:
     st.session_state.model_manager = None
 if 'temp_session' not in st.session_state:
     st.session_state.temp_session = None
-
 if 'model_loaded' not in st.session_state:
     st.session_state.model_loaded = False
-if not st.session_state.model_manager:
-    st.session_state.model_manager = ModelManager()
-try:
-    st.session_state.model_manager.load_model()
-    st.session_state.model_loaded = True
-except:
-    st.session_state.model_loaded = False
+
+# Only load model once
+if not st.session_state.model_loaded:
+    with st.spinner("AI 모델을 로드하는 중..."):
+        if not st.session_state.model_manager:
+            st.session_state.model_manager = ModelManager()
+        try:
+            st.session_state.model_manager.load_model()
+            st.session_state.model_loaded = True
+        except:
+            st.session_state.model_loaded = False
+            st.error("AI 모델 로딩에 실패했습니다. Mock 모델로 전환합니다.")
 
 ui = UIComponents()
 korean_processor = KoreanTextProcessor()
@@ -312,11 +307,40 @@ def render_chat_sidebar():
             if st.button(
                 "🗑️",
                 key=f"delete_{session['id']}",
-                help="이 채팅만 삭제합니다" if st.session_state.language == 'ko' else "Delete this chat only"
+                help="이 채팅만 삭제합니다." if st.session_state.language == 'ko' else "Delete this chat only"
             ):
                 session_manager.delete_session(session['id'])
                 st.rerun()
 
+    st.markdown("---")
+    
+    # 전체 채팅 기록 다운로드
+    all_sessions_data = json.dumps(session_manager.sessions, default=str, indent=2)
+    st.download_button(
+        label="📥 모든 채팅 기록 다운로드",
+        data=all_sessions_data,
+        file_name=f"HBAI_all_chats_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+        mime="application/json",
+        help="모든 대화 기록을 하나의 JSON 파일로 저장합니다."
+    )
+    
+    # 채팅 기록 불러오기
+    uploaded_file = st.file_uploader(
+        "📤 채팅 기록 업로드",
+        type="json",
+        help="다운로드한 JSON 파일을 업로드하여 대화 기록을 불러올 수 있습니다."
+    )
+    if uploaded_file is not None:
+        try:
+            uploaded_data = json.load(uploaded_file)
+            for session_id, session_data in uploaded_data.items():
+                if session_id not in session_manager.sessions:
+                    session_manager.sessions[session_id] = session_data
+            st.success("대화 기록을 성공적으로 불러왔습니다!")
+            st.rerun()
+        except Exception as e:
+            st.error(f"파일을 불러오는 중 오류가 발생했습니다: {e}")
+    
     st.markdown("---")
 
     col1, col2 = st.columns(2)
@@ -340,20 +364,9 @@ def render_main_chat_area():
     
     messages_container = st.container()
 
-    if current_session is None:
+    if current_session is None or len(current_session['messages']) == 0:
         render_gemini_welcome_screen()
     else:
-        messages_json = json.dumps(current_session['messages'], default=str, indent=2)
-        
-        st.download_button(
-            label="💾 채팅 전체 다운로드",
-            data=messages_json,
-            file_name=f"HBAI_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-            mime="application/json",
-            help="현재 대화 내용을 JSON 파일로 저장합니다."
-        )
-        st.markdown("---")
-        
         with messages_container:
             render_messages(current_session['messages'])
 
@@ -391,6 +404,7 @@ def render_gemini_welcome_screen():
                 const input = document.querySelector('input[placeholder^="메시지를"]');
                 if (input) {{
                     input.value = value;
+                    input.focus();
                 }}
             }}
         </script>
