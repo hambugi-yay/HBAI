@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from korean_utils import KoreanTextProcessor
 from ui_components import UIComponents
+from langdetect import detect # 언어 감지를 위한 라이브러리 추가
 
 # Mock ModelManager for testing when dependencies are not available
 class MockModelManager:
@@ -475,44 +476,69 @@ def process_chat_message(user_input):
             session_id, _ = session_manager.create_new_session()
         # Add user message to current session
         session_manager.add_message("user", user_input)
+        
+        # --- Language Enforcement Logic ---
+        # 1. Detect the language of the user's input
+        detected_lang = 'ko' # Default language
+        try:
+            detected_lang = detect(user_input)
+        except:
+            pass # Fallback to default if detection fails
+
+        # 2. Create a temporary chat history with a language instruction
+        temp_chat_history = [(msg['role'], msg['content']) for msg in session_manager.get_current_session()['messages']]
+        
+        lang_instruction = ""
+        if detected_lang == 'ko':
+            lang_instruction = "응답은 무조건 한국어로 해주세요."
+        else:
+            lang_instruction = "Please respond strictly in English."
+
+        # Modify the last message to include the language instruction
+        temp_chat_history[-1] = ('user', f"{user_input}\n\n[INSTRUCTION]: {lang_instruction}")
+        
+        # --- End of Language Enforcement Logic ---
+
         # Generate AI response
         with st.spinner(
             "AI가 응답을 생성하는 중입니다..." if st.session_state.language == 'ko' else "AI is generating response..."
         ):
             response = None
-            # Prepare conversation context from current session
-            current_session = session_manager.get_current_session()
-            if current_session:
-                chat_history = [(msg['role'], msg['content']) for msg in current_session['messages']]
-                conversation_context = korean_processor.prepare_chat_context(chat_history)
-                # Try real model first if available
-                if st.session_state.model_loaded and st.session_state.model_manager:
-                    try:
-                        response = st.session_state.model_manager.generate_chat_response(
-                            conversation_context,
-                            max_length=300,
-                            temperature=0.7,
-                            top_p=0.9
-                        )
-                    except Exception as e:
-                        print(f"Real model failed: {str(e)}")
-                        response = None
-                # Fall back to mock responses if real model unavailable or failed
-                if not response:
-                    print("Using mock response fallback")
-                    mock_manager = MockModelManager()
-                    response = mock_manager.generate_chat_response(conversation_context)
-                if response:
-                    # Process Korean text
-                    processed_response = korean_processor.post_process_response(response)
-                    session_manager.add_message("assistant", processed_response)
-                else:
-                    error_msg = (
-                        "응답 생성에 실패했습니다. 다시 시도해주세요."
-                        if st.session_state.language == 'ko'
-                        else "Failed to generate response. Please try again."
-                    )
-                    session_manager.add_message("assistant", error_msg)
+            # Prepare conversation context from the new temporary history
+            conversation_context = korean_processor.prepare_chat_context(temp_chat_history)
+              
+            # Try real model first if available
+            if st.session_state.model_loaded and st.session_state.model_manager:
+                try:
+                    response = st.session_state.model_manager.generate_chat_response(
+                        conversation_context,  
+                        max_length=300,  
+                        temperature=0.7,  
+                        top_p=0.9  
+                    )  
+                except Exception as e:
+                    print(f"Real model failed: {str(e)}")
+                    response = None
+              
+            # Fall back to mock responses if real model unavailable or failed
+            if not response:
+                print("Using mock response fallback")
+                mock_manager = MockModelManager()
+                # Mock manager doesn't use the full context, so we pass the original user input
+                response = mock_manager.generate_chat_response(user_input)
+              
+            if response:
+                # Process Korean text
+                processed_response = korean_processor.post_process_response(response)
+                session_manager.add_message("assistant", processed_response)
+            else:
+                error_msg = (
+                    "응답 생성에 실패했습니다. 다시 시도해주세요."
+                    if st.session_state.language == 'ko'
+                    else "Failed to generate response. Please try again."
+                )
+                session_manager.add_message("assistant", error_msg)
+      
     except Exception as e:
         error_msg = (
             f"채팅 처리 중 오류가 발생했습니다: {str(e)}"
@@ -523,4 +549,3 @@ def process_chat_message(user_input):
 
 if __name__ == "__main__":
     main()
-
